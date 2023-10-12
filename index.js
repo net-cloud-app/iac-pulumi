@@ -117,4 +117,4 @@ if (desiredAzCount >= 2 && desiredAzCount <= 3) {
 
 pulumi.output("vpc_id", vpc.id);
 
-//update 1
+//update 2
