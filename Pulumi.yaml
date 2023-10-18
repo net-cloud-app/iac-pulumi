@@ -1,6 +1,6 @@
-name: project
+name: pulumitest
 runtime:
-  name: nodejs
+  name: python
   options:
-    typescript: false
-description: A minimal AWS JavaScript Pulumi program
+    virtualenv: venv
+description: A minimal Python Pulumi program
