@@ -232,7 +232,7 @@ try:
                                      source_security_group_id=app_security_group.id,
                                      )
 
-    # Creating a custom Parameter group for Postgres 15
+    # Creating a custom Parameter group for mariadb
     custom_pg = pulumi_aws.rds.ParameterGroup("csye6255-mariadb",
                                               family="mariadb10.5",
                                               )
@@ -286,9 +286,7 @@ try:
     }}
 }}
 EOL
-sudo systemctl daemon-reload
-sudo systemctl enable app
-sudo systemctl start app
+
 """
     )
     ec2_instance = ec2.Instance("ec2-instance",
@@ -328,3 +326,8 @@ except ValueError as e:
     # Handle the exception
     print(f"An error occurred: {e}")
 pulumi.export('vpc_id', vpc.id)
+
+
+# sudo systemctl daemon-reload
+# sudo systemctl enable app
+# sudo systemctl start app
