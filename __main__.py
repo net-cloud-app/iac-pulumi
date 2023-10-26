@@ -264,30 +264,15 @@ try:
     db_username = rds_instance.username
     db_password = rds_instance.password
 
-    # user_data = pulumi.Output.all(rds_endpoint, db_name, db_username, db_password).apply(
-    # lambda args : f"""#!/bin/bash
-    # echo RDS_ENDPOINT={args[0]} > /home/admin/.env
-    # echo "DATABASE_NAME={args[1]}" >> /home/admin/.env
-    # echo "USER={args[2]}" >> /home/admin/.env
-    # echo "PGPASSWORD={args[3]}" >> /home/admin/.env
-    # """
-    # )
 
     user_data = pulumi.Output.all(rds_endpoint, db_name, db_username, db_password).apply(
         lambda args: f"""#!/bin/bash
-    cat <<EOL > /home/admin/config.json
-{{
-    "development": {{
-        "host": "{args[0]}",
-        "database": "{args[1]}",
-        "password": "{args[3]}",
-        "username": "{args[2]}",
-        "dialect": "mysql"
-    }}
-}}
-EOL
-
+echo "DB_ENDPOINT={args[0]}" > /opt/csye6225/.env
+echo "DB_NAME={args[1]}" >> /opt/csye6225/.env
+echo "DB_USER={args[2]}" >> /opt/csye6225/.env
+echo "DB_PASSWORD={args[3]}" >> /opt/csye6225/.env
 """
+
     )
     ec2_instance = ec2.Instance("ec2-instance",
                                 ami=custom_ami_id,
