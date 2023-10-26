@@ -268,8 +268,8 @@ try:
     user_data = pulumi.Output.all(rds_endpoint, db_name, db_username, db_password).apply(
         lambda args: f"""#!/bin/bash
 echo "DB_ENDPOINT={args[0]}" > /opt/csye6225/.env
-echo "DB_NAME={args[1]}" >> /opt/csye6225/.env
-echo "DB_USER={args[2]}" >> /opt/csye6225/.env
+echo "DB_USERNAME={args[1]}" >> /opt/csye6225/.env
+echo "DB_DATABASE={args[2]}" >> /opt/csye6225/.env
 echo "DB_PASSWORD={args[3]}" >> /opt/csye6225/.env
 """
 
