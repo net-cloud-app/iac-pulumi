@@ -1,7 +1,9 @@
 import pulumi
 import pulumi_aws
+import pulumi_aws.route53 as route53
 from pulumi_aws import ec2, Provider, get_availability_zones, Provider
 from pulumi_aws import rds
+
 # from pulumi_aws_native import rds
 
 import ipaddress
@@ -264,22 +266,47 @@ try:
     db_username = rds_instance.username
     db_password = rds_instance.password
 
-
     user_data = pulumi.Output.all(rds_endpoint, db_name, db_username, db_password).apply(
         lambda args: f"""#!/bin/bash
 echo "DB_ENDPOINT={args[0]}" > /opt/csye6225/.env
 echo "DB_USERNAME={args[1]}" >> /opt/csye6225/.env
 echo "DB_DATABASE={args[2]}" >> /opt/csye6225/.env
 echo "DB_PASSWORD={args[3]}" >> /opt/csye6225/.env
+
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/amazon-cloudwatch-agent.json -s
+
 """
 
     )
+
+    ec2_role = pulumi_aws.iam.Role('ec2Role',
+                                   assume_role_policy="""{
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Action": "sts:AssumeRole",
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "ec2.amazonaws.com"
+                }
+            }]
+        }"""
+                                   )
+    # Attach the AWS-managed CloudWatchAgentServer policy to the role
+    policy_attachment = pulumi_aws.iam.RolePolicyAttachment('CloudWatchAgentServerPolicyAttachment',
+                                                            role=ec2_role.name,
+                                                            policy_arn='arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy')
+
+    # Create an Instance Profile for the role
+    instance_profile = pulumi_aws.iam.InstanceProfile(
+        'ec2InstanceProfile', role=ec2_role.name)
+
     ec2_instance = ec2.Instance("ec2-instance",
                                 ami=custom_ami_id,
                                 instance_type="t2.micro",
                                 subnet_id=public_subnets[0].id,
                                 security_groups=[app_security_group.id],
                                 key_name=key_pair_name,  # Attach the key pair
+                                iam_instance_profile=instance_profile.name,
 
                                 associate_public_ip_address=True,
                                 tags={
@@ -304,13 +331,45 @@ echo "DB_PASSWORD={args[3]}" >> /opt/csye6225/.env
                           security_group_id=app_security_group.id
                           )
 
-    # Determine the latest PostgreSQL 15.x version to create the db instance
+    ec2.SecurityGroupRule("ec2-to-internet-https-outbound-rule",
+                          type="egress",
+                          from_port=443,               # Source port for HTTPS
+                          to_port=443,                 # Destination port for HTTPS
+                          protocol="tcp",
+                          # Allow to all IP addresses
+                          cidr_blocks=["0.0.0.0/0"],
+                          # Your EC2 instance's security group ID
+                          security_group_id=app_security_group.id
+                          )
 
 
 except ValueError as e:
     # Handle the exception
     print(f"An error occurred: {e}")
 pulumi.export('vpc_id', vpc.id)
+
+# ----new code-----
+
+route53_client = boto3.client("route53")
+
+domain_name = "demo.harishnetcloud.site"  # Replace with your domain name
+
+# Get the hosted zone ID dynamically based on the domain name
+route53_zone = pulumi_aws.route53.get_zone(name=domain_name)
+
+# Create an A record to point to your EC2 instance's public IP address
+a_record = pulumi_aws.route53.Record("my-a-record",
+                                     name=domain_name,  # Root context
+                                     zone_id=route53_zone.id,
+                                     type="A",
+                                     ttl=300,
+                                     # Assuming ec2_instance is your EC2 resource
+                                     records=[ec2_instance.public_ip],
+                                     )
+
+# Export your EC2 instance's public IP and the Route 53 A record
+pulumi.export("ec2_instance_public_ip", ec2_instance.public_ip)
+pulumi.export("route53_a_record", a_record.fqdn)
 
 
 # sudo systemctl daemon-reload
