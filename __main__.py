@@ -17,6 +17,7 @@ aws_vpccidr = pulumi.Config("vpc").require("cidrBlock")
 aws_region = pulumi.Config("aws").require("region")
 key_pair_name = pulumi.Config("vpc").require("ssh_key_pair")
 port_no = pulumi.Config("vpc").require("port_no")
+host_name=pulumi.Config("host_name").require("name")
 
 # Create a new VPC
 vpc = ec2.Vpc("vpc",
@@ -352,7 +353,7 @@ pulumi.export('vpc_id', vpc.id)
 
 route53_client = boto3.client("route53")
 
-domain_name = "demo.harishnetcloud.site"  # Replace with your domain name
+domain_name = host_name  # Replace with your domain name
 
 # Get the hosted zone ID dynamically based on the domain name
 route53_zone = pulumi_aws.route53.get_zone(name=domain_name)
