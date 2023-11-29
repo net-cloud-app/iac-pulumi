@@ -3,17 +3,18 @@ import pulumi_aws
 import pulumi_aws.route53 as route53
 from pulumi_aws import ec2, Provider, get_availability_zones, Provider
 from pulumi_aws import rds
-from pulumi_aws import autoscaling
-from pulumi_aws import lb
+
+import pulumi_gcp as gcp
+from pulumi_gcp import storage, iam
+
 
 # from pulumi_aws_native import rds
 
 import ipaddress
 import boto3
-import base64
 
 
-
+print("hi")
 
 aws_profile = pulumi.Config("aws").require("profile")
 aws_vpccidr = pulumi.Config("vpc").require("cidrBlock")
@@ -36,7 +37,8 @@ vpc = ec2.Vpc("vpc",
               )
 
 # Create a new Internet Gateway and a
-# Attach it to the VPC
+#
+# ttach it to the VPC
 gateway = ec2.InternetGateway("gateway",
                               vpc_id=vpc.id,
                               tags={
@@ -87,7 +89,6 @@ try:
                                   ) for i, az in enumerate(az_list)]
 
     private_subnet_ids = [subnet.id for subnet in private_subnets]
-    public_subnet_ids = [subnet.id for subnet in public_subnets]
 
     # Create an RDS subnet group
     rds_subnet_group = pulumi_aws.rds.SubnetGroup("my-rds-subnet-group",
@@ -131,6 +132,9 @@ try:
               destination_cidr_block="0.0.0.0/0",
               gateway_id=gateway.id,  # Connect to the Internet Gateway
               )
+    
+
+
 
     # Create the application security group
     app_security_group = ec2.SecurityGroup("app-security-group",
@@ -139,47 +143,6 @@ try:
                                                "Name": "Application Security Group",
                                            }
                                            )
-    
-    load_balancer_security_group = ec2.SecurityGroup("load-balancer-security-group",
-                                            vpc_id=vpc.id,
-                                            tags={
-                                                "Name": "Load Balancer Security Group",
-                                            }
-                                            )
-    
-    load_balancer_sg_id = load_balancer_security_group.id
-
-    
-  
-
-    load_balancer_security_group_rule_80 = ec2.SecurityGroupRule("load-balancer-ingress-rule-80",
-                                            type="ingress",
-                                            from_port=80,
-                                            to_port=80,
-                                            protocol="tcp",
-                                            cidr_blocks=["0.0.0.0/0"],  # Allow from anywhere
-                                            security_group_id=load_balancer_security_group.id,
-                                            )
-    
-
-    load_balancer_security_group_rule_443 = ec2.SecurityGroupRule("load-balancer-ingress-rule-443",
-                                            type="ingress",
-                                            from_port=443,
-                                            to_port=443,
-                                            protocol="tcp",
-                                            cidr_blocks=["0.0.0.0/0"],  # Allow from anywhere
-                                            security_group_id=load_balancer_security_group.id,
-                                        )
-    
-    pulumi_aws.ec2.SecurityGroupRule("load-balancer-egress-rule",
-                                        type="egress",
-                                        from_port=0,
-                                        to_port=0,
-                                        protocol="-1",
-                                        cidr_blocks=["0.0.0.0/0"],  # Allow to anywhere
-                                        security_group_id=load_balancer_security_group.id,
-                                    )
-    
 
     app_security_group_rule_ssh = ec2.SecurityGroupRule("app-security-group-rule-ssh",
                                                         type="ingress",
@@ -188,41 +151,45 @@ try:
                                                         protocol="tcp",
                                                         # Allow from anywhere
                                                         cidr_blocks=[
-                                                              "0.0.0.0/0"],
-                                                        security_group_id=load_balancer_security_group.id,
+                                                            "0.0.0.0/0"],
+                                                        security_group_id=app_security_group.id,
                                                         )
-    
-    app_port = port_no
-    # app_security_group_rule_app = ec2.SecurityGroupRule("app-security-group-rule-app",
-    #                                                     type="ingress",
-    #                                                     from_port=app_port,
-    #                                                     to_port=app_port,
-    #                                                     protocol="tcp",
-    #                                                     # Allow from anywhere
-    #                                                     cidr_blocks=[
-    #                                                         "0.0.0.0/0"],
-    #                                                     security_group_id=load_balancer_security_group.id,
-    #                                                     )
-    
-    ec2.SecurityGroupRule("app-from-lb",
-        type="ingress",
-        from_port=8000,
-        to_port=8000,
-        protocol="tcp",
-        source_security_group_id=load_balancer_sg_id,
-        security_group_id=app_security_group.id,
-    )
-    
+    app_security_group_rule_http = ec2.SecurityGroupRule("app-security-group-rule-http",
+                                                         type="ingress",
+                                                         from_port=80,
+                                                         to_port=80,
+                                                         protocol="tcp",
+                                                         # Allow from anywhere
+                                                         cidr_blocks=[
+                                                             "0.0.0.0/0"],
+                                                         security_group_id=app_security_group.id,
+                                                         )
 
-    ec2.SecurityGroupRule("app-security-group-egress-rule",
-                                type="egress",
-                                from_port=0,
-                                to_port=0,
-                                protocol="-1",
-                                # Allow all outbound traffic only to the load balancer security group
-                                security_group_id=app_security_group.id,
-                                source_security_group_id=load_balancer_security_group.id,
-                            )
+    app_security_group_rule_https = ec2.SecurityGroupRule("app-security-group-rule-https",
+                                                          type="ingress",
+                                                          from_port=443,
+                                                          to_port=443,
+                                                          protocol="tcp",
+                                                          # Allow from anywhere
+                                                          cidr_blocks=[
+                                                              "0.0.0.0/0"],
+                                                          security_group_id=app_security_group.id,
+                                                          )
+
+    # Replace 'APP_PORT' with your application's specific port
+    app_port = port_no
+    app_security_group_rule_app = ec2.SecurityGroupRule("app-security-group-rule-app",
+                                                        type="ingress",
+                                                        from_port=app_port,
+                                                        to_port=app_port,
+                                                        protocol="tcp",
+                                                        # Allow from anywhere
+                                                        cidr_blocks=[
+                                                            "0.0.0.0/0"],
+                                                        security_group_id=app_security_group.id,
+                                                        )
+    # Your custom AMI name
+    # custom_ami_name = "debian12-custom-ami"  # Replace with your AMI name
 
     # Create an AWS EC2 client using boto3
     ec2_client = boto3.session.Session(profile_name=aws_profile).client("ec2")
@@ -255,22 +222,28 @@ try:
     else:
         print("Custom AMI not found.")
 
+    # print("this is the RDS instance")
     # Create the RDS security group
     rds_security_group = pulumi_aws.ec2.SecurityGroup("database-security-group",
-                                                      vpc_id=vpc.id,  
+                                                      vpc_id=vpc.id,  # Replace with your VPC ID
                                                       name="database-security-group",
                                                       description="Security group for RDS instances",
                                                       )
 
-
+    # Add a rule to allow PostgreSQL traffic from the application security group
+    # Assuming you have an `app_security_group` defined elsewhere
     pulumi_aws.ec2.SecurityGroupRule("rds-ingress-rule",
                                      type="ingress",
                                      from_port=3306,
                                      to_port=3306,
                                      protocol="tcp",
                                      security_group_id=rds_security_group.id,
+                                     # Replace with your application security group ID
                                      source_security_group_id=app_security_group.id,
                                      )
+    
+    sns_topic = pulumi_aws.sns.Topic("my-sns-topic")
+
 
     # Creating a custom Parameter group for mariadb
     custom_pg = pulumi_aws.rds.ParameterGroup("csye6255-mariadb",
@@ -291,7 +264,9 @@ try:
                                            skip_final_snapshot=True,
                                            multi_az=False,
                                            publicly_accessible=False,
+                                           # Make sure to define rds_subnet_group
                                            db_subnet_group_name=rds_subnet_group.name,
+                                           # Define rds_security_group
                                            vpc_security_group_ids=[
                                                rds_security_group.id],
                                            )
@@ -301,197 +276,22 @@ try:
     db_name = rds_instance.db_name
     db_username = rds_instance.username
     db_password = rds_instance.password
+    sns_arn = sns_topic.arn
 
-    user_data = pulumi.Output.all(rds_endpoint, db_name, db_username, db_password).apply(
+    user_data = pulumi.Output.all(rds_endpoint, db_name, db_username, db_password, sns_arn).apply(
         lambda args: f"""#!/bin/bash
 echo "DB_ENDPOINT={args[0]}" > /opt/csye6225/.env
 echo "DB_USERNAME={args[1]}" >> /opt/csye6225/.env
 echo "DB_DATABASE={args[2]}" >> /opt/csye6225/.env
 echo "DB_PASSWORD={args[3]}" >> /opt/csye6225/.env
+echo "SNS_TOPIC_ARN={args[4]}" >> /opt/csye6225/.env
+
 
 sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/amazon-cloudwatch-agent.json -s
-
-sudo chown root:root /opt/csye6225/migrations/20231001203320-create-assignment.js
-
-cd /opt/csye6225
-node app.js
 
 """
 
     )
-
-    def encoding(data):
-        return base64.b64encode(data.encode()).decode()
-
-    encoded_userdata = user_data.apply(encoding)
-
-    # Create the Application Load Balancer
-    load_balancer = pulumi_aws.lb.LoadBalancer("web-app-lb",
-                                        enable_deletion_protection=False,
-                                        internal=False,
-                                        load_balancer_type="application",
-                                        # security_groups=[app_security_group.id],  # Attach the load balancer security group
-                                        security_groups=[load_balancer_security_group.id],
-                                        subnets=public_subnet_ids,  # Specify public subnets
-                                )
-    
-
-    # Create the Target Group
-    target_group = pulumi_aws.lb.TargetGroup("web-app-target-group",
-                                        port=3000,
-                                        protocol="HTTP",
-                                        target_type="instance",
-                                        vpc_id=vpc.id,
-                                        health_check={
-                                                        "enabled": True,
-                                                        "path": "/healthz",  
-                                                        "protocol": "HTTP",
-                                                        "port": "3000",
-                                                        "interval": 30,
-                                                        "timeout": 5,
-                                                        "healthy_threshold": 2,
-                                                        "unhealthy_threshold": 2,
-                                                    },
-                                                    tags={
-                                                        "Name": "web-app-target-group",
-                                                    }
-
-                                    )
-    
-
-    # Attach the Target Group to the Auto Scaling Group
-    # attachment = autoscaling.Attachment("asg-attachment",
-    #                                         autoscaling_group_name=auto_scaling_group.name,
-    #                                         target_group_arn=target_group.arn,
-    #                                     )
-
-
-    listener = pulumi_aws.lb.Listener("my-listener",
-                      load_balancer_arn=load_balancer.arn,
-                      port=80,
-                      protocol="HTTP",
-                      default_actions=[{
-                                            "type": "forward",
-                                            "target_group_arn": target_group.arn,
-                                        }],
-                      )
-    
-    
-    launch_template = ec2.LaunchTemplate(
-                                            "webapp-launch-template",
-                                            image_id=custom_ami_id,
-                                            instance_type="t2.micro",
-                                            key_name=key_pair_name,
-                                            network_interfaces=[{
-                                                                    "associate_public_ip_address": True,
-                                                                    "security_groups": [app_security_group.id],
-                                                                }],
-                                            user_data=encoded_userdata,
-                                            block_device_mappings=[{
-                                                                        "device_name": "/dev/xvda",  # AMI's root device name
-                                                                        "ebs": {
-                                                                            "volume_size": 25,
-                                                                            "volume_type": "gp2",
-                                                                            "delete_on_termination": True,
-                                                                        },
-                                                                    }], 
-                                            # security_group_names=[app_security_group.name],
-                                            tag_specifications=[{
-                                                "resource_type": "instance",
-                                                "tags": {
-                                                    "Name": "webapp-instance",
-                                                },
-                                            }],
-                                        )
-
-    
-    auto_scaling_group = autoscaling.Group("asg",
-                                                # launch_configuration=launch_config.id,
-                                                launch_template={
-                                                                    "id": launch_template.id,
-                                                                    "version": "$Latest",  
-                                                                },
-                                                target_group_arns=[target_group.arn],
-                                                vpc_zone_identifiers=public_subnet_ids,
-                                                min_size=1,
-                                                max_size=3,
-                                                desired_capacity=1,
-                                                default_cooldown=60,
-                                                # health_check_type="EC2",
-                                                # health_check_grace_period=300,
-                                                # force_delete=True,
-                                                tags=[{
-                                                    "key": "AutoScalingGroup",
-                                                    "value": "true",
-                                                    "propagate_at_launch": True,
-                                                }],
-                                            )
-    
-    
-    scale_up_policy = autoscaling.Policy("scale-up-policy",
-                                        scaling_adjustment=1,  # Increment by 1
-                                        adjustment_type="ChangeInCapacity",
-                                        cooldown=60,  # Cooldown period in seconds
-                                        autoscaling_group_name=auto_scaling_group.name,
-                                        policy_type="SimpleScaling",
-                                        )
-    
-
-    
-    scale_down_policy = autoscaling.Policy("scale-down-policy",
-                                        scaling_adjustment=-1,  # Decrement by 1
-                                        adjustment_type="ChangeInCapacity",
-                                        cooldown=60,  # Cooldown period in seconds
-                                        autoscaling_group_name=auto_scaling_group.name,
-                                        policy_type="SimpleScaling",
-                                        )
-    
-    
-    alarm_cpuhigh = pulumi_aws.cloudwatch.MetricAlarm("CPU-HIGH",
-                                                        comparison_operator="GreaterThanThreshold",
-                                                        evaluation_periods=2,
-                                                        metric_name="CPU-Utilization",
-                                                        namespace="AWS/EC2",
-                                                        period=60,
-                                                        statistic="Average",
-                                                        threshold=25.0,
-                                                        alarm_actions=[scale_up_policy.arn],
-                                                        dimensions={"AutoScalingGroupName": auto_scaling_group.name},
-                                                    )
-
-    alarm_cpulow = pulumi_aws.cloudwatch.MetricAlarm("CPU-LOW",
-                                                        comparison_operator="LessThanThreshold",
-                                                        evaluation_periods=2,
-                                                        metric_name="CPU-Utilization",
-                                                        namespace="AWS/EC2",
-                                                        period=60,
-                                                        statistic="Average",
-                                                        threshold=5.0,
-                                                        alarm_actions=[scale_down_policy.arn],
-                                                        dimensions={"AutoScalingGroupName": auto_scaling_group.name},
-                                                    )
-    
-    
-
-    # Attach the Target Group to the Auto Scaling Group
-    # attachment = lb.TargetGroupAttachment("asg-attachment",
-    #                                   target_group_arn=target_group.arn,
-    #                                   target_id=auto_scaling_group.id,
-    #                                   port=80,
-    #                                   )
-    
-    
-
-    # listener_arn = listener.arn
-
-
-
-
-    
-    pulumi.export("load_balancer_dns_name", load_balancer.dns_name)
-
-
-    
 
     ec2_role = pulumi_aws.iam.Role('ec2Role',
                                    assume_role_policy="""{
@@ -505,7 +305,6 @@ node app.js
             }]
         }"""
                                    )
-    
     # Attach the AWS-managed CloudWatchAgentServer policy to the role
     policy_attachment = pulumi_aws.iam.RolePolicyAttachment('CloudWatchAgentServerPolicyAttachment',
                                                             role=ec2_role.name,
@@ -515,26 +314,26 @@ node app.js
     instance_profile = pulumi_aws.iam.InstanceProfile(
         'ec2InstanceProfile', role=ec2_role.name)
 
-    # ec2_instance = ec2.Instance("ec2-instance",
-    #                             ami=custom_ami_id,
-    #                             instance_type="t2.micro",
-    #                             subnet_id=public_subnets[0].id,
-    #                             security_groups=[app_security_group.id],
-    #                             key_name=key_pair_name,  
-    #                             iam_instance_profile=instance_profile.name,
+    ec2_instance = ec2.Instance("ec2-instance",
+                                ami=custom_ami_id,
+                                instance_type="t2.micro",
+                                subnet_id=public_subnets[0].id,
+                                security_groups=[app_security_group.id],
+                                key_name=key_pair_name,  # Attach the key pair
+                                iam_instance_profile=instance_profile.name,
 
-    #                             associate_public_ip_address=True,
-    #                             tags={
-    #                                 "Name": "MyEC2Instance",
-    #                             },
-    #                             root_block_device=ec2.InstanceRootBlockDeviceArgs(
-    #                                 volume_size=25,
-    #                                 volume_type='gp2',
-    #                                 delete_on_termination=True,
-    #                             ),
-    #                             disable_api_termination=False,
-    #                             user_data=user_data
-    #                             )
+                                associate_public_ip_address=True,
+                                tags={
+                                    "Name": "MyEC2Instance",
+                                },
+                                root_block_device=ec2.InstanceRootBlockDeviceArgs(
+                                    volume_size=25,
+                                    volume_type='gp2',
+                                    delete_on_termination=True,
+                                ),
+                                disable_api_termination=False,
+                                user_data=user_data
+                                )
     ec2.SecurityGroupRule("ec2-to-rds-outbound-rule",
                           type="egress",
                           from_port=3306,             # Source port
@@ -542,6 +341,7 @@ node app.js
                           protocol="tcp",
                           # Reference to the RDS security group
                           source_security_group_id=rds_security_group.id,
+                          # Your EC2 instance's security group ID
                           security_group_id=app_security_group.id
                           )
 
@@ -552,6 +352,7 @@ node app.js
                           protocol="tcp",
                           # Allow to all IP addresses
                           cidr_blocks=["0.0.0.0/0"],
+                          # Your EC2 instance's security group ID
                           security_group_id=app_security_group.id
                           )
 
@@ -561,34 +362,151 @@ except ValueError as e:
     print(f"An error occurred: {e}")
 pulumi.export('vpc_id', vpc.id)
 
+# ----new code-----
+
+
+
 
 route53_client = boto3.client("route53")
 
-domain_name = host_name  
+domain_name = host_name  # Replace with your domain name
 
 # Get the hosted zone ID dynamically based on the domain name
 route53_zone = pulumi_aws.route53.get_zone(name=domain_name)
 
-a_record = pulumi_aws.route53.Record("web-app-a-record",
-    name=domain_name,
-    type="A",
-    aliases=[{
-        "name": load_balancer.dns_name,
-        "zoneId": load_balancer.zone_id,
-        "evaluateTargetHealth": False,
-    }],
-    zone_id=route53_zone.zone_id,
+# Create an A record to point to your EC2 instance's public IP address
+a_record = pulumi_aws.route53.Record("my-a-record",
+                                     name=domain_name,  # Root context
+                                     zone_id=route53_zone.id,
+                                     type="A",
+                                     ttl=300,
+                                     # Assuming ec2_instance is your EC2 resource
+                                     records=[ec2_instance.public_ip],
+                                     )
+
+
+config = pulumi.Config()
+
+# Get values from Pulumi Config
+gcp_project = config.require("gcpProject")
+email_server = config.require("emailServer")
+email_port = config.require("emailPort")
+email_username = config.require_secret("emailUsername")
+email_password = config.require_secret("emailPassword")
+
+# Google Cloud Storage bucket
+bucket = gcp.storage.Bucket("my-bucket")
+
+# Google Service Account
+service_account = gcp.serviceaccount.Account("my-service-account",
+    account_id="my-service-account",
+    display_name="My Service Account",
+    project=gcp_project,  # Use Pulumi Config for project ID
 )
 
-# Exporting EC2 instance's public IP and the Route 53 A record
-# pulumi.export("ec2_instance_public_ip", ec2_instance.public_ip)
-# pulumi.export("route53_a_record", a_record.fqdn)
-pulumi.export("web_app_dns_name", a_record.fqdn)
+# Access keys for the Google Service Account
+access_key = gcp.serviceaccount.AccessKey("my-access-key",
+    service_account_id=service_account.id,
+)
+
+# Dynamically generate Pulumi secrets
+access_key_secret = pulumi.secret(access_key.private_key)
+secret_id = pulumi.secret(service_account.id)
+
+# DynamoDB instance
+table = pulumi_aws.dynamodb.Table("my-table",
+    attributes=[pulumi_aws.dynamodb.TableAttributeArgs(
+        name="Id",
+        type="N",
+    )],
+    key_schema=[pulumi_aws.dynamodb.TableKeySchemaArgs(
+        attribute_name="Id",
+        key_type="HASH",
+    )],
+    read_capacity=5,
+    write_capacity=5,
+)
+
+# IAM Role for Lambda Function
+role = pulumi_aws.iam.Role("my-role",
+    assume_role_policy="""{
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Action": "sts:AssumeRole",
+          "Principal": {
+            "Service": "lambda.amazonaws.com"
+          },
+          "Effect": "Allow",
+          "Sid": ""
+        }
+      ]
+    }"""
+)
+
+# AWS Lambda function
+lambda_func = pulumi_aws.lambda_.Function("my-lambda",
+    code=pulumi.AssetArchive({
+        ".": pulumi.FileArchive("path-to-your-lambda-code"),
+    }),  # Replace with your Lambda code path
+    handler="index.handler",
+    runtime="nodejs12.x",
+    environment=pulumi_aws.lambda_.FunctionEnvironmentArgs(
+        variables={
+            "GOOGLE_CREDENTIALS": access_key_secret,
+            "EMAIL_SERVER": email_server,
+            "EMAIL_PORT": email_port,
+            "EMAIL_USERNAME": email_username,
+            "EMAIL_PASSWORD": email_password,
+            "GOOGLE_PROJECT_ID": secret_id,
+            "GCS_BUCKET_NAME": bucket.name,  # Export GCS_BUCKET_NAME
+            "DYNAMODB_TABLE_NAME": table.name,  # Export DYNAMODB_TABLE_NAME
+        },
+    ),
+    role=role.arn,
+)
+
+# IAM Policy for Lambda Function
+policy = pulumi_aws.iam.Policy("my-policy",
+    policy="""{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": [
+                "logs:*"
+            ],
+            "Effect": "Allow",
+            "Resource": "*"
+        }
+    ]
+}"""
+)
+
+# Attach the policy to the role
+policy_attachment = pulumi_aws.iam.RolePolicyAttachment("my-policy-attachment",
+    role=role.name,
+    policy_arn=policy.arn,
+)
 
 
-pulumi.export("load_balancer_security_group_id", load_balancer_security_group.id)
+
+pulumi.export("bucket_name", bucket.name)
+pulumi.export("dynamodb_table_name", table.name)
+pulumi.export("email_username", email_username)
+pulumi.export("email_password", email_password)
 
 
+# Export values
+pulumi.export("bucket_name", bucket.name)
+pulumi.export("service_account_email", service_account.email)
+pulumi.export("public_key", access_key.public_key)
+pulumi.export_secret("access_key_secret", access_key_secret)
+
+
+# Export your EC2 instance's public IP and the Route 53 A record
+pulumi.export("ec2_instance_public_ip", ec2_instance.public_ip)
+pulumi.export("route53_a_record", a_record.fqdn)
+pulumi.export("sns_topic_arn", sns_topic.arn)
 
 
 
