@@ -6,6 +6,8 @@ from pulumi_aws import rds
 
 import pulumi_gcp as gcp
 from pulumi_gcp import storage, iam
+from pulumi.asset import Archive, FileArchive
+
 
 
 # from pulumi_aws_native import rds
@@ -242,7 +244,42 @@ try:
                                      source_security_group_id=app_security_group.id,
                                      )
     
-    sns_topic = pulumi_aws.sns.Topic("my-sns-topic")
+    aws_dev_provider = Provider(
+    "awsdev",
+    profile=aws_profile,
+    region=aws_region,
+    )
+    
+    # sns_topic = pulumi_aws.sns.Topic("my-sns-topic")
+    sns_topic = pulumi_aws.sns.Topic(
+    "serverlessTopic",
+    display_name="Serverless SNS Topic for Lambda Functions",
+    )
+    
+
+    sns_topic_policy = pulumi_aws.sns.TopicPolicy("my-sns-topic-policy",
+    arn=sns_topic.arn,
+    policy=pulumi.Output.all(sns_topic.arn).apply(lambda arn: f'''{{
+                        "Version": "2012-10-17",
+                        "Id": "MySNSTopicPolicy",
+                        "Statement": [
+                            {{
+                                "Effect": "Allow",
+                                "Principal": "*",
+                                "Action": "SNS:Publish",
+                                "Resource": "{arn}",
+                                "Condition": {{
+                                    "ArnEquals": {{
+                                        "aws:SourceArn": "{arn}"
+                                    }},
+                                    "StringEquals": {{
+                                        "SNS:Content-BasedDeduplication": "true"
+                                    }}
+                                }}
+                            }}
+                        ]
+                    }}''')
+                )
 
 
     # Creating a custom Parameter group for mariadb
@@ -293,74 +330,297 @@ sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-c
 
     )
 
-    ec2_role = pulumi_aws.iam.Role('ec2Role',
-                                   assume_role_policy="""{
-            "Version": "2012-10-17",
-            "Statement": [{
-                "Action": "sts:AssumeRole",
-                "Effect": "Allow",
-                "Principal": {
-                    "Service": "ec2.amazonaws.com"
-                }
-            }]
-        }"""
-                                   )
-    # Attach the AWS-managed CloudWatchAgentServer policy to the role
-    policy_attachment = pulumi_aws.iam.RolePolicyAttachment('CloudWatchAgentServerPolicyAttachment',
-                                                            role=ec2_role.name,
-                                                            policy_arn='arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy')
+    # ec2_role = pulumi_aws.iam.Role('ec2Role',
+    #                                assume_role_policy="""{
+    #         "Version": "2012-10-17",
+    #         "Statement": [{
+    #             "Action": "sts:AssumeRole",
+    #             "Effect": "Allow",
+    #             "Principal": {
+    #                 "Service": "ec2.amazonaws.com"
+    #             }
+    #         }]
+    #     }"""
+    #                                )
+    # # Attach the AWS-managed CloudWatchAgentServer policy to the role
+    # policy_attachment = pulumi_aws.iam.RolePolicyAttachment('CloudWatchAgentServerPolicyAttachment',
+    #                                                         role=ec2_role.name,
+    #                                                         policy_arn='arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy')
 
     # Create an Instance Profile for the role
+    # instance_profile = pulumi_aws.iam.InstanceProfile(
+    #     'ec2InstanceProfile', role=ec2_role.name)
+
+    config = pulumi.Config()
+
+    # Get values from Pulumi Config
+    gcp_project = config.require("gcpProject")
+    email_server = config.require("emailServer")
+    email_port = config.require("emailPort")
+    email_username = config.require("emailUsername")
+    email_password = config.require_secret("emailPassword")
+
+    # Google Cloud Storage bucket
+    bucket = gcp.storage.Bucket("my-bucket", location="us")
+
+    # Google Service Account
+    service_account = gcp.serviceaccount.Account("my-service-account",
+        account_id="my-service-account",
+        display_name="My Service Account",
+        project=gcp_project,  # Use Pulumi Config for project ID
+    )
+
+
+
+    access_key = gcp.serviceaccount.Key("my-service-account-key",
+        service_account_id=service_account.id,
+    )
+
+    storage_admin_binding = gcp.projects.IAMMember(
+        "storage-admin-binding",
+        project=gcp_project,
+        member=pulumi.Output.concat("serviceAccount:", service_account.email),
+        role="roles/storage.objectAdmin",
+    ) 
+
+#  Create an AWS Secrets Manager secret with a new unique name
+
+    secNameforgcpkeys = pulumi_aws.secretsmanager.Secret(
+        "secNameforgcpkeys",
+        name="secNameforgcpkeys",  # Replace with your new unique secret name
+        description="Google Cloud service account key for Lambda",
+    )
+
+
+# Use the private key and service account id directly, without marking them as secrets
+    access_key_secret = access_key.private_key
+    secret_id = service_account.id
+
+    # DynamoDB instancez
+    table = pulumi_aws.dynamodb.Table("my-table",
+    
+        attributes=[
+            {
+                "name": "Id",
+                "type": "N",
+            },
+        ],
+        hash_key="Id",
+        read_capacity=5,
+        write_capacity=5,
+    )
+
+    # IAM Role for Lambda Function
+    role = pulumi_aws.iam.Role("my-role",
+        assume_role_policy="""{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+            "Action": "sts:AssumeRole",
+            "Principal": {
+                "Service": "lambda.amazonaws.com"
+            },
+            "Effect": "Allow",
+            "Sid": ""
+            }
+        ]
+        }"""
+    )
+
+    # lambda_zip_path = '/Users/harish/Downloads/dependency/lamdacode.zip'
+    # lambda_zip = FileArchive(lambda_zip_path)
+
+# AWS Lambda function
+    lambda_func = pulumi_aws.lambda_.Function("my-lambda",
+        code=pulumi.AssetArchive({
+            ".": pulumi.FileArchive("dependency"),
+        }),  # Replace with your Lambda code path
+        handler="index.handler",
+        runtime="nodejs14.x",
+        environment=pulumi_aws.lambda_.FunctionEnvironmentArgs(
+            variables={
+                "GOOGLE_CREDENTIALS": access_key_secret,
+                "EMAIL_SERVER": email_server,
+                "EMAIL_PORT": email_port,
+                "EMAIL_USERNAME": email_username,
+                "EMAIL_PASSWORD": email_password,
+                "GOOGLE_PROJECT_ID": secret_id,
+                "GCS_BUCKET_NAME": bucket.name,  # Export GCS_BUCKET_NAME
+                "DYNAMODB_TABLE_NAME": table.name,  # Export DYNAMODB_TABLE_NAME
+            },
+        ),
+        role=role.arn,
+    )
+
+    sns_subscription = pulumi_aws.sns.TopicSubscription(
+        "snsToLambda",
+        topic=sns_topic.arn,
+        protocol="lambda",
+        endpoint=lambda_func.arn,
+        opts=pulumi.ResourceOptions(provider=aws_dev_provider),
+    )
+
+    lambda_permission = pulumi_aws.lambda_.Permission(
+        "lambdaPermission",
+        action="lambda:InvokeFunction",
+        function=lambda_func.name,
+        principal="sns.amazonaws.com",
+        source_arn=sns_topic.arn,
+        opts=pulumi.ResourceOptions(provider=aws_dev_provider),
+    )
+
+    pulumi.export("lambda_permission_id", lambda_permission.id)
+
+
+    pulumi.export("sns_subscription_id", sns_subscription.id)
+
+    # IAM Policy for Lambda Function
+    policy = pulumi_aws.iam.Policy("my-policy",
+        policy="""{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": [
+                    "logs:*"
+                ],
+                "Effect": "Allow",
+                "Resource": "*"
+            }
+        ]
+    }"""
+    )
+
+    sns_publish_policy = pulumi_aws.iam.Policy(
+        "sns-publish-policy",
+        name="sns-publish-policy",
+        description="Allows publishing to SNS topics",
+        policy={
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "sns:Publish",
+                    "Resource": "*",
+                },
+            ],
+        },
+    )
+
+# ec2_role = pulumi_aws.iam.Role('ec2Role',
+#                                    assume_role_policy="""{
+#             "Version": "2012-10-17",
+#             "Statement": [{
+#                 "Action": "sts:AssumeRole",
+#                 "Effect": "Allow",
+#                 "Principal": {
+#                     "Service": "ec2.amazonaws.com"
+#                 }
+#             }]
+#         }"""
+
+    ec2_role = pulumi_aws.iam.Role(
+        "cloudwatch-agent-role",
+        assume_role_policy="""{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Action": "sts:AssumeRole",
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "ec2.amazonaws.com"
+                    }
+                }
+            ]
+        }""",
+        managed_policy_arns=[
+            "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+            sns_publish_policy.arn,  # Replace "sns_publish_policy" with the actual reference to your SNS publishing policy
+        ],
+    )
+                                   
+    # Attach the AWS-managed CloudWatchAgentServer policy to the role
+    policy_attachment = pulumi_aws.iam.RolePolicyAttachment('CloudWatchAgentServerPolicyAttachment',
+                                                                role=ec2_role.name,
+                                                                policy_arn='arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy')
+
+# Attach the policy to the role
+# policy_attachment = pulumi_aws.iam.RolePolicyAttachment("my-policy-attachment",
+#     role=role.name,
+#     policy_arn=policy.arn,
+# )
+
+    sns_policy_attachment = pulumi_aws.iam.RolePolicyAttachment(
+        "sns-publish-policy-attachment",
+        role=ec2_role.name,  # Replace "role" with the actual name or reference to your IAM role
+        policy_arn=sns_publish_policy.arn,  # Replace "sns_publish_policy" with the actual reference to your SNS publishing policy
+    )
+
     instance_profile = pulumi_aws.iam.InstanceProfile(
-        'ec2InstanceProfile', role=ec2_role.name)
+            'ec2InstanceProfile', role=ec2_role.name)
+
+
+
+    pulumi.export("bucket_name", bucket.name)
+    pulumi.export("dynamodb_table_name", table.name)
+    pulumi.export("email_username", email_username)
+    pulumi.export("email_password", email_password)
+
+
+    # Export values
+    pulumi.export("bucket_name", bucket.name)
+    pulumi.export("service_account_email", service_account.email)
+    pulumi.export("public_key", access_key.public_key)
+    # pulumi.export_secret("access_key_secret", access_key_secret)
+    pulumi.export("access_key_secret", access_key_secret)
+
 
     ec2_instance = ec2.Instance("ec2-instance",
-                                ami=custom_ami_id,
-                                instance_type="t2.micro",
-                                subnet_id=public_subnets[0].id,
-                                security_groups=[app_security_group.id],
-                                key_name=key_pair_name,  # Attach the key pair
-                                iam_instance_profile=instance_profile.name,
+                                    ami=custom_ami_id,
+                                    instance_type="t2.micro",
+                                    subnet_id=public_subnets[0].id,
+                                    security_groups=[app_security_group.id],
+                                    key_name=key_pair_name,  # Attach the key pair
+                                    iam_instance_profile=instance_profile.name,
 
-                                associate_public_ip_address=True,
-                                tags={
-                                    "Name": "MyEC2Instance",
-                                },
-                                root_block_device=ec2.InstanceRootBlockDeviceArgs(
-                                    volume_size=25,
-                                    volume_type='gp2',
-                                    delete_on_termination=True,
-                                ),
-                                disable_api_termination=False,
-                                user_data=user_data
-                                )
+                                    associate_public_ip_address=True,
+                                    tags={
+                                        "Name": "MyEC2Instance",
+                                    },
+                                    root_block_device=ec2.InstanceRootBlockDeviceArgs(
+                                        volume_size=25,
+                                        volume_type='gp2',
+                                        delete_on_termination=True,
+                                    ),
+                                    disable_api_termination=False,
+                                    user_data=user_data
+                                    )
     ec2.SecurityGroupRule("ec2-to-rds-outbound-rule",
-                          type="egress",
-                          from_port=3306,             # Source port
-                          to_port=3306,               # Destination port
-                          protocol="tcp",
-                          # Reference to the RDS security group
-                          source_security_group_id=rds_security_group.id,
-                          # Your EC2 instance's security group ID
-                          security_group_id=app_security_group.id
-                          )
+                            type="egress",
+                            from_port=3306,             # Source port
+                            to_port=3306,               # Destination port
+                            protocol="tcp",
+                            # Reference to the RDS security group
+                            source_security_group_id=rds_security_group.id,
+                            # Your EC2 instance's security group ID
+                            security_group_id=app_security_group.id
+                            )
 
     ec2.SecurityGroupRule("ec2-to-internet-https-outbound-rule",
-                          type="egress",
-                          from_port=443,               # Source port for HTTPS
-                          to_port=443,                 # Destination port for HTTPS
-                          protocol="tcp",
-                          # Allow to all IP addresses
-                          cidr_blocks=["0.0.0.0/0"],
-                          # Your EC2 instance's security group ID
-                          security_group_id=app_security_group.id
-                          )
+                            type="egress",
+                            from_port=443,               # Source port for HTTPS
+                            to_port=443,                 # Destination port for HTTPS
+                            protocol="tcp",
+                            # Allow to all IP addresses
+                            cidr_blocks=["0.0.0.0/0"],
+                            # Your EC2 instance's security group ID
+                            security_group_id=app_security_group.id
+                            )
 
 
 except ValueError as e:
-    # Handle the exception
+        # Handle the exception
     print(f"An error occurred: {e}")
-pulumi.export('vpc_id', vpc.id)
+    pulumi.export('vpc_id', vpc.id)
 
 # ----new code-----
 
@@ -385,128 +645,237 @@ a_record = pulumi_aws.route53.Record("my-a-record",
                                      )
 
 
-config = pulumi.Config()
+# config = pulumi.Config()
 
-# Get values from Pulumi Config
-gcp_project = config.require("gcpProject")
-email_server = config.require("emailServer")
-email_port = config.require("emailPort")
-email_username = config.require_secret("emailUsername")
-email_password = config.require_secret("emailPassword")
+# # Get values from Pulumi Config
+# gcp_project = config.require("gcpProject")
+# email_server = config.require("emailServer")
+# email_port = config.require("emailPort")
+# email_username = config.require("emailUsername")
+# email_password = config.require_secret("emailPassword")
 
-# Google Cloud Storage bucket
-bucket = gcp.storage.Bucket("my-bucket")
+# # Google Cloud Storage bucket
+# bucket = gcp.storage.Bucket("my-bucket", location="us")
 
-# Google Service Account
-service_account = gcp.serviceaccount.Account("my-service-account",
-    account_id="my-service-account",
-    display_name="My Service Account",
-    project=gcp_project,  # Use Pulumi Config for project ID
-)
-
-# Access keys for the Google Service Account
-access_key = gcp.serviceaccount.AccessKey("my-access-key",
-    service_account_id=service_account.id,
-)
-
-# Dynamically generate Pulumi secrets
-access_key_secret = pulumi.secret(access_key.private_key)
-secret_id = pulumi.secret(service_account.id)
-
-# DynamoDB instance
-table = pulumi_aws.dynamodb.Table("my-table",
-    attributes=[pulumi_aws.dynamodb.TableAttributeArgs(
-        name="Id",
-        type="N",
-    )],
-    key_schema=[pulumi_aws.dynamodb.TableKeySchemaArgs(
-        attribute_name="Id",
-        key_type="HASH",
-    )],
-    read_capacity=5,
-    write_capacity=5,
-)
-
-# IAM Role for Lambda Function
-role = pulumi_aws.iam.Role("my-role",
-    assume_role_policy="""{
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Action": "sts:AssumeRole",
-          "Principal": {
-            "Service": "lambda.amazonaws.com"
-          },
-          "Effect": "Allow",
-          "Sid": ""
-        }
-      ]
-    }"""
-)
-
-# AWS Lambda function
-lambda_func = pulumi_aws.lambda_.Function("my-lambda",
-    code=pulumi.AssetArchive({
-        ".": pulumi.FileArchive("path-to-your-lambda-code"),
-    }),  # Replace with your Lambda code path
-    handler="index.handler",
-    runtime="nodejs12.x",
-    environment=pulumi_aws.lambda_.FunctionEnvironmentArgs(
-        variables={
-            "GOOGLE_CREDENTIALS": access_key_secret,
-            "EMAIL_SERVER": email_server,
-            "EMAIL_PORT": email_port,
-            "EMAIL_USERNAME": email_username,
-            "EMAIL_PASSWORD": email_password,
-            "GOOGLE_PROJECT_ID": secret_id,
-            "GCS_BUCKET_NAME": bucket.name,  # Export GCS_BUCKET_NAME
-            "DYNAMODB_TABLE_NAME": table.name,  # Export DYNAMODB_TABLE_NAME
-        },
-    ),
-    role=role.arn,
-)
-
-# IAM Policy for Lambda Function
-policy = pulumi_aws.iam.Policy("my-policy",
-    policy="""{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Action": [
-                "logs:*"
-            ],
-            "Effect": "Allow",
-            "Resource": "*"
-        }
-    ]
-}"""
-)
-
-# Attach the policy to the role
-policy_attachment = pulumi_aws.iam.RolePolicyAttachment("my-policy-attachment",
-    role=role.name,
-    policy_arn=policy.arn,
-)
+# # Google Service Account
+# service_account = gcp.serviceaccount.Account("my-service-account",
+#     account_id="my-service-account",
+#     display_name="My Service Account",
+#     project=gcp_project,  # Use Pulumi Config for project ID
+# )
 
 
 
-pulumi.export("bucket_name", bucket.name)
-pulumi.export("dynamodb_table_name", table.name)
-pulumi.export("email_username", email_username)
-pulumi.export("email_password", email_password)
+# access_key = gcp.serviceaccount.Key("my-service-account-key",
+#     service_account_id=service_account.id,
+# )
+
+# storage_admin_binding = gcp.projects.IAMMember(
+#     "storage-admin-binding",
+#     project=gcp_project,
+#     member=pulumi.Output.concat("serviceAccount:", service_account.email),
+#     role="roles/storage.objectAdmin",
+# ) 
+
+# #  Create an AWS Secrets Manager secret with a new unique name
+
+# secNameforgcpkeys = pulumi_aws.secretsmanager.Secret(
+#     "secNameforgcpkeys",
+#     name="secNameforgcpkeys",  # Replace with your new unique secret name
+#     description="Google Cloud service account key for Lambda",
+# )
 
 
-# Export values
-pulumi.export("bucket_name", bucket.name)
-pulumi.export("service_account_email", service_account.email)
-pulumi.export("public_key", access_key.public_key)
-pulumi.export_secret("access_key_secret", access_key_secret)
+# # Use the private key and service account id directly, without marking them as secrets
+# access_key_secret = access_key.private_key
+# secret_id = service_account.id
+
+# # DynamoDB instancez
+# table = pulumi_aws.dynamodb.Table("my-table",
+ 
+#     attributes=[
+#         {
+#             "name": "Id",
+#             "type": "N",
+#         },
+#     ],
+#     hash_key="Id",
+#     read_capacity=5,
+#     write_capacity=5,
+# )
+
+# # IAM Role for Lambda Function
+# role = pulumi_aws.iam.Role("my-role",
+#     assume_role_policy="""{
+#       "Version": "2012-10-17",
+#       "Statement": [
+#         {
+#           "Action": "sts:AssumeRole",
+#           "Principal": {
+#             "Service": "lambda.amazonaws.com"
+#           },
+#           "Effect": "Allow",
+#           "Sid": ""
+#         }
+#       ]
+#     }"""
+# )
+
+# lambda_zip_path = '/Users/ankithreddy/Desktop/cloud/Nov22/lambda.zip'
+# lambda_zip = FileArchive(lambda_zip_path)
+
+# # AWS Lambda function
+# lambda_func = pulumi_aws.lambda_.Function("my-lambda",
+#     code=pulumi.AssetArchive({
+#         ".": pulumi.FileArchive("lambda_zip"),
+#     }),  # Replace with your Lambda code path
+#     handler="index.handler",
+#     runtime="nodejs14.x",
+#     environment=pulumi_aws.lambda_.FunctionEnvironmentArgs(
+#         variables={
+#             "GOOGLE_CREDENTIALS": access_key_secret,
+#             "EMAIL_SERVER": email_server,
+#             "EMAIL_PORT": email_port,
+#             "EMAIL_USERNAME": email_username,
+#             "EMAIL_PASSWORD": email_password,
+#             "GOOGLE_PROJECT_ID": secret_id,
+#             "GCS_BUCKET_NAME": bucket.name,  # Export GCS_BUCKET_NAME
+#             "DYNAMODB_TABLE_NAME": table.name,  # Export DYNAMODB_TABLE_NAME
+#         },
+#     ),
+#     role=role.arn,
+# )
+
+# sns_subscription = pulumi_aws.sns.TopicSubscription(
+#     "snsToLambda",
+#     topic=sns_topic.arn,
+#     protocol="lambda",
+#     endpoint=lambda_func.arn,
+#     opts=pulumi.ResourceOptions(provider=aws_dev_provider),
+# )
+
+# lambda_permission = pulumi_aws.lambda_.Permission(
+#     "lambdaPermission",
+#     action="lambda:InvokeFunction",
+#     function=lambda_func.name,
+#     principal="sns.amazonaws.com",
+#     source_arn=sns_topic.arn,
+#     opts=pulumi.ResourceOptions(provider=aws_dev_provider),
+# )
+
+# pulumi.export("lambda_permission_id", lambda_permission.id)
+
+
+# pulumi.export("sns_subscription_id", sns_subscription.id)
+
+# # IAM Policy for Lambda Function
+# policy = pulumi_aws.iam.Policy("my-policy",
+#     policy="""{
+#     "Version": "2012-10-17",
+#     "Statement": [
+#         {
+#             "Action": [
+#                 "logs:*"
+#             ],
+#             "Effect": "Allow",
+#             "Resource": "*"
+#         }
+#     ]
+# }"""
+# )
+
+# sns_publish_policy = pulumi_aws.iam.Policy(
+#     "sns-publish-policy",
+#     name="sns-publish-policy",
+#     description="Allows publishing to SNS topics",
+#     policy={
+#         "Version": "2012-10-17",
+#         "Statement": [
+#             {
+#                 "Effect": "Allow",
+#                 "Action": "sns:Publish",
+#                 "Resource": "*",
+#             },
+#         ],
+#     },
+# )
+
+# # ec2_role = pulumi_aws.iam.Role('ec2Role',
+# #                                    assume_role_policy="""{
+# #             "Version": "2012-10-17",
+# #             "Statement": [{
+# #                 "Action": "sts:AssumeRole",
+# #                 "Effect": "Allow",
+# #                 "Principal": {
+# #                     "Service": "ec2.amazonaws.com"
+# #                 }
+# #             }]
+# #         }"""
+
+# ec2_role = pulumi_aws.iam.Role(
+#     "cloudwatch-agent-role",
+#     assume_role_policy="""{
+#         "Version": "2012-10-17",
+#         "Statement": [
+#             {
+#                 "Action": "sts:AssumeRole",
+#                 "Effect": "Allow",
+#                 "Principal": {
+#                     "Service": "ec2.amazonaws.com"
+#                 }
+#             }
+#         ]
+#     }""",
+#     managed_policy_arns=[
+#         "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+#         sns_publish_policy.arn,  # Replace "sns_publish_policy" with the actual reference to your SNS publishing policy
+#     ],
+# )
+                                   
+#     # Attach the AWS-managed CloudWatchAgentServer policy to the role
+# policy_attachment = pulumi_aws.iam.RolePolicyAttachment('CloudWatchAgentServerPolicyAttachment',
+#                                                             role=ec2_role.name,
+#                                                             policy_arn='arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy')
+
+# # Attach the policy to the role
+# # policy_attachment = pulumi_aws.iam.RolePolicyAttachment("my-policy-attachment",
+# #     role=role.name,
+# #     policy_arn=policy.arn,
+# # )
+
+# sns_policy_attachment = iam.RolePolicyAttachment(
+#     "sns-publish-policy-attachment",
+#     role=ec2_role.name,  # Replace "role" with the actual name or reference to your IAM role
+#     policy_arn=sns_publish_policy.arn,  # Replace "sns_publish_policy" with the actual reference to your SNS publishing policy
+# )
+
+# instance_profile = pulumi_aws.iam.InstanceProfile(
+#         'ec2InstanceProfile', role=ec2_role.name)
+
+
+
+# pulumi.export("bucket_name", bucket.name)
+# pulumi.export("dynamodb_table_name", table.name)
+# pulumi.export("email_username", email_username)
+# pulumi.export("email_password", email_password)
+
+
+# # Export values
+# pulumi.export("bucket_name", bucket.name)
+# pulumi.export("service_account_email", service_account.email)
+# pulumi.export("public_key", access_key.public_key)
+# # pulumi.export_secret("access_key_secret", access_key_secret)
+# pulumi.export("access_key_secret", access_key_secret)
+
+
 
 
 # Export your EC2 instance's public IP and the Route 53 A record
 pulumi.export("ec2_instance_public_ip", ec2_instance.public_ip)
 pulumi.export("route53_a_record", a_record.fqdn)
 pulumi.export("sns_topic_arn", sns_topic.arn)
+pulumi.export("topicName", sns_topic.name)
+
 
 
 
