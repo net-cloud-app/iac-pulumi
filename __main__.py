@@ -385,11 +385,11 @@ sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-c
 
 #  Create an AWS Secrets Manager secret with a new unique name
 
-    secNameforgcpkeys = pulumi_aws.secretsmanager.Secret(
-        "secNameforgcpkeys",
-        name="secNameforgcpkeys",  # Replace with your new unique secret name
-        description="Google Cloud service account key for Lambda",
-    )
+    # secNameforgcpkeys = pulumi_aws.secretsmanager.Secret(
+    #     "secNameforgcpkeys",
+    #     name="secNameforgcpkeys",  # Replace with your new unique secret name
+    #     description="Google Cloud service account key for Lambda",
+    # )
 
 
 # Use the private key and service account id directly, without marking them as secrets
@@ -878,7 +878,3 @@ pulumi.export("topicName", sns_topic.name)
 
 
 
-
-# sudo systemctl daemon-reload
-# sudo systemctl enable app
-# sudo systemctl start app
